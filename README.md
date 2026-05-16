@@ -1,42 +1,45 @@
-# FlowAlign Research Fork
+# FlowAlign 改进版课程作业
 
-This repository is a research fork of **FlowAlign: Trajectory-Regularized, Inversion-Free Flow-based Image Editing**.  
-In addition to the original `flowalign` baseline, this fork adds two experimental variants:
+本项目是我在“信息科学的数学理论”课程作业中，基于 **FlowAlign** 做的改进实现。
 
-- `flowdinoalign`: replaces the terminal pixel-space regularizer with a frozen DINO feature-space constraint.
-- `flowlaplacianalign`: replaces the terminal pixel-space regularizer with a lightweight latent-space Laplacian pyramid constraint.
+项目的大部分整体框架、ODE 采样思路和 Stable Diffusion 3 相关接口都沿用了 FlowAlign；在此基础上，我新增了两个实验方法，并把 PIE-Bench 的生成与评估流程整理成了可独立运行的脚本。
 
-The codebase also separates **generation** and **evaluation** into two scripts for PIE-Bench experiments:
+## 主要改动
 
-- `generate_images.py`
-- `evaluate_metrics.py`
+- 保留原版 `flowalign` 作为 baseline
+- 新增 `flowdinoalign`
+  - 将终端像素约束替换为 DINO 特征空间约束
+- 新增 `flowlaplacianalign`
+  - 将终端像素约束替换为 latent 空间的 Laplacian pyramid 约束
+- 将 PIE-Bench 流程拆成两个脚本
+  - `generate_images.py`
+  - `evaluate_metrics.py`
+- 新增背景区域评估
+  - `background_mse`
+  - `background_psnr`
+  - `background_ssim`
+  - `background_lpips_vgg`
+  - `structural_distance_dino`
+- 新增语义对齐指标
+  - `clip_score`
+  - `hps_score`（可选）
 
-![concept](assets/concept.jpg)
+## 项目结构
 
-## What is included
+```text
+FlowAlign-main/
+├── generate_images.py
+├── evaluate_metrics.py
+├── diffusion/
+├── piebench_utils.py
+├── flowlaplacianalign_report.tex
+├── data_eva.ipynb
+└── assets/
+```
 
-- Stable Diffusion 3 medium editing pipeline via `diffusers`
-- Flow-based editing methods:
-  - `dual`
-  - `sdedit`
-  - `flowedit`
-  - `flowalign`
-  - `flowdinoalign`
-  - `flowlaplacianalign`
-- PIE-Bench generation and background-only evaluation
-- Background metrics:
-  - MSE
-  - PSNR
-  - SSIM
-  - LPIPS-VGG
-  - DINO structural distance
-- Semantic metrics:
-  - CLIP Score with ViT-L/14
-  - HPS placeholder hook
+## 环境依赖
 
-## Requirements
-
-Recommended environment:
+建议使用 Python 3.10 或 3.11，并安装 `requirements.txt` 中的依赖。
 
 ```bash
 conda create -n flowalign-eval python=3.10
@@ -44,48 +47,24 @@ conda activate flowalign-eval
 pip install -r requirements.txt
 ```
 
-For RTX 5090 / `sm_120`, use a PyTorch build with CUDA 12.8 or newer.
+如果你的显卡是 RTX 5090，建议使用支持 `sm_120` 的 PyTorch / CUDA 12.8 及以上版本。
 
-## Repository Layout
+## 数据准备
+
+本项目默认使用 PIE-Bench 的预处理数据目录，例如：
 
 ```text
-FlowAlign-main/
-├── generate_images.py          # PIE-Bench image generation
-├── evaluate_metrics.py         # Local metric evaluation
-├── diffusion/                  # FlowAlign samplers and editors
-├── piebench_utils.py           # PIE-Bench I/O helpers
-├── flowlaplacianalign_report.tex
-├── data_eva.ipynb
-└── assets/
+/home/ljc/code/FlowAlign-main/PIE_Bench_pp
 ```
 
-## Supported Editing Methods
+同时还需要 Stable Diffusion 3 medium 的本地权重，支持以下两种形式：
 
-| Method | Description |
-|---|---|
-| `dual` | Dual-trajectory baseline |
-| `sdedit` | SDEdit-style stochastic editing |
-| `flowedit` | FlowEdit-style inversion-free editing |
-| `flowalign` | Original FlowAlign baseline |
-| `flowdinoalign` | FlowAlign with DINO feature terminal regularization |
-| `flowlaplacianalign` | FlowAlign with latent Laplacian pyramid terminal regularization |
+- 本地 diffusers 目录
+- 单文件 `.safetensors` 权重
 
-## Quick Start
+## 如何生成图片
 
-### 1. Prepare models and data
-
-This repository does **not** ship PIE-Bench or SD3 weights.
-
-You need:
-
-- PIE-Bench preprocessed data, e.g. `PIE_Bench_pp/`
-- SD3 medium weights, either:
-  - a local diffusers directory, or
-  - a local single-file checkpoint such as `sd3_medium_incl_clips_t5xxlfp8.safetensors`
-
-### 2. Generate edited images
-
-#### FlowAlign baseline
+### 1. FlowAlign baseline
 
 ```bash
 python generate_images.py \
@@ -99,7 +78,7 @@ python generate_images.py \
   --shift 3.0
 ```
 
-#### FlowLaplacianAlign
+### 2. FlowLaplacianAlign
 
 ```bash
 python generate_images.py \
@@ -113,15 +92,17 @@ python generate_images.py \
   --shift 3.0
 ```
 
-For a fast sanity check, use:
+### 3. 先跑 100 张测试
+
+如果你想先快速验证流程，可以加：
 
 ```bash
 --max_samples 100
 ```
 
-### 3. Evaluate metrics locally
+## 如何评估
 
-After generation, evaluate the results from the output directory:
+生成图片后，直接对输出目录做评估：
 
 ```bash
 python evaluate_metrics.py \
@@ -129,60 +110,59 @@ python evaluate_metrics.py \
   --pred_dir /home/ljc/code/FlowAlign-main/eval_results_flowlaplacianalign
 ```
 
-This script reads local predictions and PIE-Bench ground truth, then computes:
+评估脚本会读取本地生成结果与 PIE-Bench 的源图、掩码和提示词，计算：
 
-- background MSE
-- background PSNR
-- background SSIM
-- background LPIPS-VGG
-- structural distance with DINO
-- CLIP Score
-- HPS placeholder value if available
+- 背景区域指标
+  - MSE
+  - PSNR
+  - SSIM
+  - LPIPS-VGG
+  - DINO structural distance
+- 语义对齐指标
+  - CLIP Score
+  - HPS Score（如果环境支持）
 
-The evaluator writes `metrics.json` incrementally after each sample and prints a final summary dictionary at the end.
+## 默认实验参数
 
-## Reproducibility Notes
+为了和原版 FlowAlign 公平对比，当前默认实验参数保持一致：
 
-The default PIE-Bench reproduction settings used in this fork are:
+- 基础模型：Stable Diffusion 3 medium
+- shift coefficient：`3.0`
+- 总调度步数：`50`
+- 有效 NFE：`33`
+- 跳过早期步数：`17`
+- CFG scale：`13.5`
+- 源一致性权重：`0.01`
 
-- Backbone: Stable Diffusion 3 medium
-- Shift coefficient: `3.0`
-- Total schedule steps: `50`
-- Effective NFE: `33`
-- Skip early noisy steps: `17`
-- CFG scale: `13.5`
-- Source consistency weight: `0.01`
+## 方法说明
 
-These settings are shared by the baseline and the two new variants so that comparisons remain fair.
+### flowalign
+原版 baseline，终端约束仍然使用像素空间的点吸引子。
 
-## Experimental Snapshot
+### flowdinoalign
+保留 FlowAlign 主框架不变，只把终端约束改成 DINO 特征空间约束。
 
-Representative full-set statistics from our local PIE-Bench runs:
+### flowlaplacianalign
+保留 FlowAlign 主框架不变，只把终端约束改成 latent 空间的多尺度 Laplacian pyramid 约束。
 
-| Method | background\_mse | background\_psnr | background\_ssim | background\_lpips\_vgg | structural\_distance\_dino | clip\_score | hps\_score |
+## 实验结果摘要
+
+本地 PIE-Bench 全量实验结果如下：
+
+| Method | background_mse | background_psnr | background_ssim | background_lpips_vgg | structural_distance_dino | clip_score | hps_score |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | `flowalign` | 0.0007111974 | 33.4599199320 | 0.9615208785 | 0.0062042582 | 0.0040374763 | 0.2433125725 | 0.2570874023 |
 | `flowlaplacianalign` | 0.0027025122 | 27.7974216420 | 0.9267545959 | 0.0132680051 | 0.0113442827 | 0.2571326196 | 0.2647080776 |
 
-## Why FlowLaplacianAlign?
+## 说明
 
-`flowlaplacianalign` is designed as a lightweight alternative to feature-heavy terminal regularizers:
+- 这份代码是基于 FlowAlign 的改进版，不是原始官方仓库的未修改复刻。
+- `flowdinoalign` 和 `flowlaplacianalign` 都是我额外新增的方法。
+- `HPS` 是可选指标，如果环境里没有对应库，评估脚本会跳过或返回空值。
 
-- no DINO dependency
-- no heavy feature-space backward pass
-- multi-scale frequency supervision
-- easy to implement and debug
-- better semantic alignment in our local runs, while keeping the FlowAlign ODE structure unchanged
+## 报告
 
-It is not meant to replace the original baseline in every setting. Instead, it provides a compact structural prior for fast experimentation and ablation studies.
+如果你想看更完整的方法说明和实验文字版总结，可以参考：
 
-## Notes
-
-- `flowdinoalign` and `flowlaplacianalign` are experimental variants added in this fork.
-- `HPS` is implemented as an optional hook; if the required package is unavailable, the evaluator records `null` for that field.
-- The repository intentionally keeps datasets and model weights out of version control.
-
-## License
-
-Please refer to the upstream FlowAlign project for the original license and citation details.
+- [`flowlaplacianalign_report.tex`](flowlaplacianalign_report.tex)
 
