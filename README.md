@@ -92,13 +92,6 @@ python generate_images.py \
   --shift 3.0
 ```
 
-### 3. 先跑 100 张测试
-
-如果你想先快速验证流程，可以加：
-
-```bash
---max_samples 100
-```
 
 ## 如何评估
 
@@ -159,10 +152,4 @@ python evaluate_metrics.py \
 - 这份代码是基于 FlowAlign 的改进版，不是原始官方仓库的未修改复刻。
 - `flowdinoalign` 和 `flowlaplacianalign` 都是我额外新增的方法。
 - `HPS` 是可选指标，如果环境里没有对应库，评估脚本会跳过或返回空值。
-
-## 报告
-
-如果你想看更完整的方法说明和实验文字版总结，可以参考：
-
-- [`flowlaplacianalign_report.tex`](flowlaplacianalign_report.tex)
 
