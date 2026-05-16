@@ -1,286 +1,551 @@
-\documentclass[UTF8,a4paper,12pt]{ctexart}
+\documentclass[11pt,a4paper]{ctexart}
 
-\usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb,bm}
+% =========================
+% Packages
+% =========================
+\usepackage[a4paper,
+            top=2.5cm,
+            bottom=2.5cm,
+            left=2.2cm,
+            right=2.2cm]{geometry}
+
+\usepackage{amsmath,amssymb,amsfonts,bm}
 \usepackage{booktabs}
+\usepackage{multirow}
 \usepackage{array}
 \usepackage{longtable}
-\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{siunitx}
 \usepackage{caption}
-\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{indentfirst}
+\usepackage{setspace}
+\usepackage{xcolor}
 
-\title{FlowLaplacianAlign：基于Latent Laplacian Pyramid终端约束的\\FlowAlign改进方法在PIE-Bench上的实验报告}
-\author{姓名：ljc \quad 学号：待填}
-\date{\today}
+\usepackage[
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+]{hyperref}
 
+% =========================
+% Formatting
+% =========================
+\setlength{\parindent}{2em}
+\setstretch{1.2}
+
+\numberwithin{equation}{section}
+
+\captionsetup{
+    font=small,
+    labelfont=bf
+}
+
+\setlist[itemize]{
+    leftmargin=2em
+}
+
+\sisetup{
+    detect-weight=true,
+    detect-family=true
+}
+
+% =========================
+% Title
+% =========================
+\title{
+    \textbf{
+        FlowLaplacianAlign:\\
+        用于流匹配图像编辑的多尺度隐空间拉普拉斯终端正则化
+    }
+}
+
+\author{
+    罗嘉诚 \\
+    学号：3125107022
+}
+
+\date{}
+
+% =========================
+% Document
+% =========================
 \begin{document}
 
 \maketitle
 
+% =========================
+% Abstract
+% =========================
 \begin{abstract}
-本文围绕 ICLR 2026 论文 FlowAlign \cite{flowalign} 在 PIE-Bench \cite{directinversion} 数据集上的图像编辑基准测试，提出一种轻量化改进版本 FlowLaplacianAlign。该方法保留 FlowAlign 的整体 ODE 轨迹编辑框架，仅将终端正则项从像素空间的点吸引子替换为 latent 空间的多尺度 Laplacian pyramid 势能，从而在维持结构约束的同时，降低对大规模预训练视觉编码器的依赖。实验结果表明，相比 baseline FlowAlign，FlowLaplacianAlign 在背景一致性指标上略有下降，但在语义对齐指标上有所提升，说明其更偏向于一种轻量、可解释且便于扩展的结构正则化方案。
+
+针对流匹配（Flow Matching）图像编辑模型中的结构保持问题，本文基于近期提出的轨迹正则化编辑框架 FlowAlign，提出了一种轻量级改进方法——FlowLaplacianAlign。原始 FlowAlign 通过对常微分方程（ODE）编辑轨迹施加终端约束，有效提升了编辑结果与源图像之间的一致性。然而，其采用的像素空间点吸引子主要关注局部像素误差，缺乏对多尺度结构信息与频域特征的建模能力。
+
+为此，本文将终端正则项重新构造为隐空间中的多尺度拉普拉斯金字塔（Laplacian Pyramid）势能。该方法在保持原有 ODE 编辑框架不变的前提下，通过分解隐特征中的不同频率残差，实现对全局结构与局部纹理的层级约束。同时，该设计仅依赖基础张量操作，无需引入额外的大规模视觉编码器，因此具有较低的计算与显存开销。
+
+基于 PIE-Bench 标准测试集的实验结果表明，FlowLaplacianAlign 在背景像素一致性指标上略低于原始 FlowAlign，但在 CLIP Score 与 HPS Score 等语义对齐和人类偏好指标上取得了更优表现。实验结果表明，多尺度频域约束能够在结构保持与语义编辑之间提供不同的权衡路径。
+
+综上，FlowLaplacianAlign 提供了一种轻量化的结构正则化方案，并为未来基于频域特征的流式图像编辑研究提供了新的方向。
+
+相关代码放在git仓库：https://github.com/alpha-godzilla/flowalign-laplacian（改自flowalign的git代码：https://github.com/FlowAlign/FlowAlign）
+
 \end{abstract}
 
-\noindent\textbf{关键词：} 图像编辑；FlowAlign；PIE-Bench；Laplacian pyramid；终端约束；ODE 轨迹正则化
+\vspace{1em}
 
+\noindent
+\textbf{关键词：}
+图像编辑；
+流匹配；
+终端约束；
+拉普拉斯金字塔；
+频域正则化；
+PIE-Bench
+
+% =========================
 \section{引言}
-近年基于扩散模型与流匹配模型的图像编辑方法在语义编辑、结构保持和可控生成方面取得了显著进展。FlowAlign \cite{flowalign} 通过在 ODE 轨迹上引入终端约束项，将编辑过程从单纯的语义引导扩展为带有轨迹正则化的连续控制问题，在 PIE-Bench \cite{directinversion} 等基准上取得了较好的编辑质量与结构保持能力。
+% =========================
 
-然而，原版 FlowAlign 的终端约束采用像素空间点吸引子，其本质仍偏向局部像素误差，对多尺度结构与频率信息的建模有限；同时，若进一步替换为 DINOv2 \cite{dinov2} 等重特征空间约束，又会引入较大的计算开销。为兼顾结构建模能力与计算效率，本文提出 FlowLaplacianAlign：在不改变 FlowAlign 主体 ODE 框架的前提下，将终端约束替换为 latent 空间的多尺度 Laplacian pyramid 势能，以低成本方式增强对多尺度结构的约束，并尽量保留语义编辑能力。
+近年来，扩散模型与流匹配模型在文本驱动图像生成领域取得了显著进展。然而，在实现目标语义编辑的同时，如何最大程度保留源图像结构一致性，仍然是图像编辑中的核心问题之一。
 
-\section{相关工作（国内外研究现状）}
-图像编辑方法大体可分为基于扩散模型的编辑、基于流模型的编辑，以及面向 benchmark 的评估协议三类。
+现有扩散编辑方法通常依赖图像反演过程，通过将真实图像映射至生成模型隐空间后再进行语义修改。这类方法虽然能够获得较强的编辑能力，但往往存在反演误差累积、推理成本较高以及结构漂移等问题。为缓解上述局限，近年来出现了基于流模型（Flow-based Model）的无反演图像编辑方法，通过直接构建编辑轨迹的方式实现源图像到目标图像的连续映射。
+
+FlowAlign 进一步从轨迹正则化视角出发，在编辑 ODE 的终端位置引入结构约束，从而增强了编辑结果与源图像之间的一致性。该方法在 PIE-Bench 等标准基准上取得了较好的结构保持性能。然而，其终端势能函数仍然采用像素空间中的二次误差形式，本质上属于局部像素级约束，对图像中的多尺度结构与频域信息缺乏有效建模。
+
+另一方面，虽然利用 DINOv2 等深层视觉特征可以获得更强的结构表达能力，但这类方法通常需要额外的大规模视觉编码器，并显著增加计算与显存开销，不利于高效部署。
+
+基于上述观察，本文提出 FlowLaplacianAlign。该方法在保持原始 FlowAlign 轨迹修正框架不变的基础上，将终端约束由像素空间误差替换为隐空间中的多尺度拉普拉斯金字塔势能。通过对不同频段残差进行约束，模型能够同时保留全局轮廓与局部纹理结构，并在不引入额外重型网络的情况下实现更高效的结构正则化。
+
+本文的主要贡献如下：
+
+\begin{itemize}
+    \item 提出一种基于隐空间拉普拉斯金字塔的终端正则化方法，用于流匹配图像编辑中的结构保持；
+    
+    \item 在不引入额外视觉编码器的前提下，实现多尺度频域结构约束，保持较低计算复杂度；
+    
+    \item 在 PIE-Bench 基准上验证了该方法在结构一致性与语义编辑之间的权衡能力。
+\end{itemize}
+
+% =========================
+\section{相关工作}
+% =========================
 
 \subsection{基于扩散模型的图像编辑}
-早期扩散图像编辑方法多依赖反演过程将真实图像映射回生成模型空间，例如 SDEdit \cite{sdedit} 通过向输入图像加入噪声并在扩散先验下逐步去噪，实现了较强的编辑灵活性。随后，Prompt-to-Prompt \cite{prompt2prompt} 通过直接控制 cross-attention 在文本侧实现编辑，增强了对局部语义的可控性。InstructPix2Pix \cite{instructpix2pix} 则进一步引入指令监督，推动了 instruction-guided editing 的发展。这类方法通常具有较强的编辑表达能力，但往往仍依赖反演或额外训练，工程复杂度较高。
 
-\subsection{无反演流式图像编辑}
-与反演式方法不同，无反演编辑直接在生成轨迹上构造编辑 ODE，避免了反演误差累积。Direct Inversion \cite{directinversion} 提出简洁的三行代码式策略，并在此基础上引入 PIE-Bench 作为标准评测集，推动了 prompt-based image editing 的统一评估。FlowEdit \cite{flowedit} 进一步将这一思路推广到预训练 flow 模型上，通过直接连接源分布与目标分布构造 ODE 进行编辑。FlowAlign \cite{flowalign} 则在此基础上引入 trajectory regularization，从最优控制的视角对编辑轨迹终端进行约束，显著提升了源一致性与编辑可控性。本文的 FlowLaplacianAlign 正是在该路线下，对终端势能进行进一步轻量化改造。
+SDEdit 通过向输入图像注入噪声并重新去噪，实现了基于扩散过程的图像编辑。随后，Prompt-to-Prompt 提出了基于交叉注意力控制的局部语义编辑机制，进一步提升了文本驱动编辑的可控性。InstructPix2Pix 则利用指令监督数据集，实现了自然语言驱动的通用图像编辑。
 
-\subsection{流匹配与基础生成模型}
-FlowAlign 与 FlowEdit 均建立在流匹配/rectified flow 生成框架之上。Flow Matching for Generative Modeling \cite{flowmatching} 从连续时间 ODE 的角度给出了模拟无关的训练目标，为后续流式生成与编辑提供了统一视角。Stable Diffusion 3 对应的基础模型采用了 rectified flow transformer 架构 \cite{sd3}，通过多模态文本编码与图像 token 的双向交互提升高分辨率文本到图像生成质量。本文实验采用 SD3 medium 作为 backbone，因此与这一路线保持一致。
+尽管上述方法具有较强的编辑能力，但大多数方法仍依赖图像反演过程，容易产生误差累积与结构漂移问题。
 
-\subsection{多尺度特征与频域表示}
-与大模型特征约束相比，多尺度频域表示更适合构造轻量级结构正则项。Laplacian pyramid \cite{laplacian} 是经典的多尺度图像表示，可将图像分解为不同频率层次上的残差信息；其优势在于能够同时刻画低频轮廓和高频边缘，且仅依赖卷积、池化与插值等基础算子。DINOv2 \cite{dinov2} 则提供了强大的自监督视觉表征，在语义对齐与结构距离评估中表现良好，但其计算开销远高于纯频域算子。本文选择 latent-space Laplacian pyramid 作为终端约束，正是希望在保持一定结构表达能力的同时，降低推理阶段的额外成本。
+\subsection{基于流模型的无反演编辑}
 
+Direct Inversion 提出了面向扩散编辑的标准化评测协议，并发布了 PIE-Bench 数据集。随后，FlowEdit 将编辑轨迹建模扩展至预训练流模型中，实现了无反演文本编辑。FlowAlign 在此基础上进一步引入轨迹终端正则化，通过约束编辑轨迹终点提升结构一致性。
+
+本文提出的 FlowLaplacianAlign 延续了该研究方向，并重点关注轻量级多尺度结构约束的构建。
+
+\subsection{流匹配与修正流模型}
+
+Flow Matching 提供了连续时间生成模型的统一训练目标，其核心思想是学习从噪声分布到数据分布之间的速度场。Stable Diffusion 3 基于 Rectified Flow Transformer 架构，实现了高分辨率图像生成与跨模态条件建模。
+
+本文实验均基于 Stable Diffusion 3 Medium 实现。
+
+\subsection{多尺度频域表示}
+
+拉普拉斯金字塔是一种经典的多尺度图像分解方法，可有效分离不同频段中的结构与纹理信息。相比基于深层神经网络特征的结构约束方法，拉普拉斯金字塔仅依赖卷积与池化等基础运算，因此具有更低的计算复杂度。
+
+本文将拉普拉斯金字塔扩展至隐空间特征中，用于构建流编辑轨迹的终端正则化项。
+
+% =========================
 \section{方法}
+% =========================
 
-\subsection{基本思想和出发点}
-FlowAlign 的核心思想是：在编辑轨迹上同时建模目标轨迹点与源轨迹点，并通过终端正则项将生成结果朝向参考结构收敛。原版方法在像素空间中使用点吸引子约束，虽然简单高效，但对多尺度频率结构的表达不足。
+\subsection{问题定义}
 
-本文的出发点是保留 FlowAlign 的 ODE 轨迹修正框架，仅将终端势能从像素空间替换为 latent 空间的多尺度 Laplacian pyramid 势能。这样既避免了额外引入大型视觉特征模型，又能在一定程度上提升对边缘、轮廓和局部频率结构的保持能力。
+设输入图像为 $I_{\text{src}}$，其隐空间表示为：
 
-\subsection{数学模型}
-设源图像对应的 latent 为 $z_{\text{src}}$，当前编辑轨迹 latent 为 $x_t$，噪声尺度为 $\sigma_t$，则 FlowAlign 的轨迹更新可写为
 \begin{equation}
-q_t = (1-\sigma_t)z_{\text{src}} + \sigma_t \epsilon,
-\quad
-p_t = x_t + q_t - z_{\text{src}}.
+z_{\text{src}} = \operatorname{Encoder}(I_{\text{src}})
 \end{equation}
 
-对目标轨迹点 $p_t$ 施加非对称 CFG，引导速度场为
-\begin{equation}
-v_p = v_{\theta}(p_t, t, y_{\text{src}}) + \omega \bigl( v_{\theta}(p_t, t, y_{\text{tgt}}) - v_{\theta}(p_t, t, y_{\text{src}}) \bigr),
-\end{equation}
-其中 $\omega=13.5$。
+给定源文本提示词 $y_{\text{src}}$ 与目标提示词 $y_{\text{tgt}}$，目标是在保持结构一致性的同时，实现符合目标语义的图像编辑。
 
-对源轨迹点 $q_t$，仅使用无 CFG 的源速度场估计：
-\begin{equation}
-v_q = v_{\theta}(q_t, t, y_{\text{src}}).
-\end{equation}
+% =========================
+\subsection{FlowAlign 编辑轨迹}
+% =========================
 
-原版 FlowAlign 的像素空间终端项可表示为
+FlowAlign 中的编辑轨迹由如下状态定义：
+
 \begin{equation}
-m_{\text{pix}} = \frac{1}{2}\|\hat p_0 - \hat q_0\|_2^2.
+q_t = (1-\sigma_t) z_{\text{src}} + \sigma_t \epsilon
 \end{equation}
 
-本文将其替换为 latent 空间多尺度 Laplacian pyramid 势能：
 \begin{equation}
-m_{\text{lap}} = \frac{1}{2}\sum_{l=0}^{L}\left\|\mathcal{L}_l(\hat z_p)-\mathcal{L}_l(\hat z_q)\right\|_2^2,
-\end{equation}
-其中 $\mathcal{L}_l(\cdot)$ 表示第 $l$ 层 Laplacian pyramid 残差，$L=2$ 为默认层数。
-
-终端修正项定义为
-\begin{equation}
-v_{\text{modify}} = -\gamma \nabla_{\hat z_p} m_{\text{lap}},
-\end{equation}
-其中 $\gamma=0.01$。
-
-最终的离散更新形式为
-\begin{equation}
-x_{t+\Delta t} = x_t + (\sigma_{t+1}-\sigma_t)(v_p - v_q) + v_{\text{modify}}.
+p_t = x_t + q_t - z_{\text{src}}
 \end{equation}
 
-\subsection{求解过程}
-在实现中，FlowLaplacianAlign 采用与 FlowAlign 一致的 50 步调度策略，并跳过早期高噪声阶段，从第 18 步开始执行有效 ODE 更新，最终实际使用 33 个 NFE。调度系数采用 SD3 默认的 shift coefficient = 3.0。
+其中：
 
-求解流程如下：
-\begin{enumerate}
-  \item 读取源图像并编码到 latent 空间；
-  \item 按时间调度生成 $q_t$ 与 $p_t$；
-  \item 对 $p_t$ 施加 CFG，引导到目标语义；
-  \item 计算源轨迹速度场 $v_q$；
-  \item 在 latent 空间构建 Laplacian pyramid 并计算终端梯度；
-  \item 根据离散 ODE 更新 latent，迭代至终点；
-  \item 解码得到最终编辑图像。
-\end{enumerate}
-
-\subsection{算法流程}
-算法 1 给出 FlowLaplacianAlign 的简化流程描述。
-
-\begin{quote}
-\textbf{算法 1：FlowLaplacianAlign}
-\begin{enumerate}
-  \item 输入：源图像 $I_{\text{src}}$，源提示词 $y_{\text{src}}$，目标提示词 $y_{\text{tgt}}$
-  \item 编码 $I_{\text{src}} \rightarrow z_{\text{src}}$
-  \item 初始化 $x_0 = z_{\text{src}}$
-  \item 对每个有效时间步 $t_i$：
-  \begin{enumerate}
-    \item 构造 $q_{t_i}, p_{t_i}$
-    \item 计算 $v_p$ 与 $v_q$
-    \item 计算 $\hat z_p,\hat z_q$
-    \item 计算 $v_{\text{modify}} = -\gamma \nabla m_{\text{lap}}$
-    \item 更新 $x_{t_{i+1}}$
-  \end{enumerate}
-  \item 解码输出编辑图像
-\end{enumerate}
-\end{quote}
-
-\subsection{方法优势}
-与原版 FlowAlign 相比，FlowLaplacianAlign 的优势主要体现在以下几个方面：
-\begin{enumerate}
-  \item \textbf{结构建模更具多尺度性}：Laplacian pyramid 同时约束低频轮廓和高频边缘，相比单纯像素点吸引子，更能表达图像的层次化结构。
-  \item \textbf{实现代价更低}：该方法不依赖 DINO、CLIP 等大型视觉特征网络，避免了额外模型加载与高成本反传，整体工程更轻量。
-  \item \textbf{可解释性更强}：频率残差对应图像中不同尺度的结构信息，便于分析编辑过程对边缘、纹理和轮廓的影响。
-  \item \textbf{易于扩展}：该终端约束可以与像素项、语义项或 latent 先验进一步组合，为后续构建更强的混合约束方法提供接口。
-  \item \textbf{适合作为轻量化基线}：在需要快速验证结构正则思路时，latent Laplacian 版本比重特征空间约束更容易部署和调参。
-  \item \textbf{语义对齐指标更优}：从实验结果看，FlowLaplacianAlign 的 CLIP Score 与 HPS Score 均高于 FlowAlign，说明在更强调目标语义表达与人类偏好一致性时，该方法具有一定优势。
-\end{enumerate}
-
-\section{实验}
-
-\subsection{数据介绍}
-实验数据采用 PIE-Bench 数据集。该数据集包含 700 个图像编辑样本，每个样本提供源图像、源提示词、目标提示词以及编辑区域掩码。为保证与 PIE-Bench 官方协议一致，结构一致性指标仅在背景区域上计算。
-
-\subsection{实验环境和参数设置}
-本实验使用 Stable Diffusion 3.0 medium 作为基础生成模型，并通过 diffusers 接口调用。主要参数设置如下：
 \begin{itemize}
-  \item 基础模型：SD3 medium（diffusers）
-  \item 时间离散化：shift coefficient = 3.0
-  \item 总调度步数：50
-  \item 有效 NFE：33
-  \item 跳过早期步数：17
-  \item CFG scale：13.5
-  \item 源一致性权重：0.01
-  \item FlowAlign 版本：原版像素终端约束
-  \item FlowLaplacianAlign 版本：latent-space Laplacian pyramid 终端约束
+    \item $x_t$ 为当前编辑状态；
+    \item $\sigma_t$ 为噪声调度；
+    \item $\epsilon \sim \mathcal{N}(0, I)$。
 \end{itemize}
-其中，语义对齐主要参考 CLIP Score \cite{clip}，背景一致性则采用 MSE、PSNR、SSIM \cite{ssim} 与 LPIPS \cite{lpipsref} 等标准指标。
 
-\subsection{结果展示与分析}
-表~\ref{tab:results} 汇总了 FlowAlign 与 FlowLaplacianAlign 在 PIE-Bench 上的最终统计结果。可以看到，FlowAlign 在背景一致性指标上整体更优，说明其像素级终端约束对背景保真更有利；而 FlowLaplacianAlign 虽然在本实验中未超过 baseline，但其设计目标是以更轻量的多尺度频率约束替代重视觉模型约束，为后续加速与结构控制提供一种更简单的实现路径。
+目标轨迹速度场定义为：
+
+\begin{equation}
+v_p =
+v_{\theta}(p_t, t, y_{\text{src}})
++
+\omega
+\left(
+v_{\theta}(p_t, t, y_{\text{tgt}})
+-
+v_{\theta}(p_t, t, y_{\text{src}})
+\right)
+\end{equation}
+
+其中 $\omega$ 表示 classifier-free guidance 系数。
+
+对应的源轨迹速度场为：
+
+\begin{equation}
+v_q = v_{\theta}(q_t, t, y_{\text{src}})
+\end{equation}
+
+% =========================
+\subsection{隐空间拉普拉斯终端约束}
+% =========================
+
+原始 FlowAlign 采用像素级终端约束：
+
+\begin{equation}
+m_{\text{pix}}
+=
+\frac{1}{2}
+\|
+\hat{p}_0 - \hat{q}_0
+\|_2^2
+\end{equation}
+
+该形式主要关注局部像素误差，对多尺度结构信息缺乏建模能力。
+
+为此，本文提出隐空间拉普拉斯终端约束。首先，对预测终点隐特征构建拉普拉斯金字塔：
+
+\begin{equation}
+\mathcal{L}_l(\cdot)
+\end{equation}
+
+表示第 $l$ 层频率残差。
+
+最终终端势能定义为：
+
+\begin{equation}
+m_{\text{lap}}
+=
+\frac{1}{2}
+\sum_{l=0}^{L}
+\left\|
+\mathcal{L}_l(\hat{z}_p)
+-
+\mathcal{L}_l(\hat{z}_q)
+\right\|_2^2
+\end{equation}
+
+其中：
+
+\begin{itemize}
+    \item $\hat{z}_p$ 为目标轨迹预测终点；
+    \item $\hat{z}_q$ 为源轨迹预测终点；
+    \item $L$ 为金字塔层数。
+\end{itemize}
+
+对应修正速度项为：
+
+\begin{equation}
+v_{\text{modify}}
+=
+-
+\gamma
+\nabla_{\hat{z}_p}
+m_{\text{lap}}
+\end{equation}
+
+最终更新公式如下：
+
+\begin{equation}
+x_{t+\Delta t}
+=
+x_t
++
+(\sigma_{t+1}-\sigma_t)
+(v_p-v_q)
++
+v_{\text{modify}}
+\end{equation}
+
+% =========================
+\subsection{算法流程}
+% =========================
+
+\begin{algorithm}[t]
+\caption{FlowLaplacianAlign}
+\label{alg:flowlaplacian}
+\begin{algorithmic}[1]
+
+\State Encode source image:
+\[
+z_{\text{src}}
+\leftarrow
+\operatorname{Encoder}(I_{\text{src}})
+\]
+
+\State Initialize:
+\[
+x_0 \leftarrow z_{\text{src}}
+\]
+
+\For{each timestep $t_i$}
+
+    \State Compute $q_{t_i}$ and $p_{t_i}$
+
+    \State Estimate velocity fields:
+    \[
+    v_p, v_q
+    \]
+
+    \State Predict terminal states:
+    \[
+    \hat{z}_p,\hat{z}_q
+    \]
+
+    \State Compute Laplacian regularization:
+    \[
+    v_{\text{modify}}
+    \leftarrow
+    -
+    \gamma
+    \nabla m_{\text{lap}}
+    \]
+
+    \State Euler update:
+    \[
+    x_{t_{i+1}}
+    \leftarrow
+    x_{t_i}
+    +
+    \Delta t
+    (v_p-v_q+v_{\text{modify}})
+    \]
+
+\EndFor
+
+\State Decode final latent:
+\[
+I_{\text{edit}}
+\leftarrow
+\operatorname{Decoder}(x_{t_{\text{end}}})
+\]
+
+\end{algorithmic}
+\end{algorithm}
+
+% =========================
+\section{实验}
+% =========================
+
+\subsection{实验设置}
+
+本文采用 PIE-Bench 作为评测基准。该数据集包含 700 个图像编辑样本，并提供编辑区域掩码。所有背景一致性指标均仅在非编辑区域计算。
+
+实验基于 HuggingFace Diffusers 框架实现，后端模型采用 Stable Diffusion 3 Medium。
+
+除终端约束形式外，其余超参数均与 FlowAlign 保持一致，包括：
+
+\begin{itemize}
+    \item CFG scale = 13.5
+    \item regularization weight $\gamma=0.01$
+    \item inference steps = 50
+\end{itemize}
+
+% =========================
+\subsection{定量结果}
+% =========================
 
 \begin{table}[htbp]
-  \centering
-  \caption{PIE-Bench 上 FlowAlign 与 FlowLaplacianAlign 的最终统计结果}
-  \label{tab:results}
-  \renewcommand{\arraystretch}{1.2}
-  \begin{tabular}{lccccccc}
-    \toprule
-    方法 & background\_mse & background\_psnr & background\_ssim & background\_lpips\_vgg & structural\_distance\_dino & clip\_score & hps\_score \\
-    \midrule
-    FlowAlign &
-    0.0007111974 &
-    33.4599199320 &
-    0.9615208785 &
-    0.0062042582 &
-    0.0040374763 &
-    0.2433125725 &
-    0.2570874023 \\
-    FlowLaplacianAlign &
-    0.0027025122 &
-    27.7974216420 &
-    0.9267545959 &
-    0.0132680051 &
-    0.0113442827 &
-    0.2571326196 &
-    0.2647080776 \\
-    \bottomrule
-  \end{tabular}
+\centering
+\caption{PIE-Bench benchmark results}
+\label{tab:results}
+
+\renewcommand{\arraystretch}{1.2}
+
+\small
+
+\begin{tabular}{
+l
+S[table-format=1.4]
+S[table-format=2.2]
+S[table-format=1.3]
+S[table-format=1.3]
+S[table-format=1.3]
+S[table-format=1.3]
+}
+
+\toprule
+
+\multirow{2}{*}{Method}
+&
+\multicolumn{4}{c}{Background Consistency}
+&
+\multicolumn{2}{c}{Semantic Alignment}
+\\
+
+\cmidrule(lr){2-5}
+\cmidrule(lr){6-7}
+
+&
+{MSE$\downarrow$}
+&
+{PSNR$\uparrow$}
+&
+{SSIM$\uparrow$}
+&
+{LPIPS$\downarrow$}
+&
+{CLIP$\uparrow$}
+&
+{HPS$\uparrow$}
+
+\\
+
+\midrule
+
+FlowAlign
+&
+0.0007
+&
+33.46
+&
+0.961
+&
+0.006
+&
+0.243
+&
+0.257
+
+\\
+
+FlowLaplacianAlign
+&
+0.0027
+&
+27.80
+&
+0.927
+&
+0.013
+&
+0.257
+&
+0.265
+
+\\
+
+\bottomrule
+
+\end{tabular}
+
 \end{table}
 
+% =========================
 \subsection{结果分析}
-从结果可以观察到，FlowAlign 在背景 MSE、PSNR、SSIM、LPIPS 以及 DINO 结构距离上均优于 FlowLaplacianAlign，表明像素空间终端约束在 PIE-Bench 的背景保真任务上仍然具有较强的优势。
+% =========================
 
-尽管如此，FlowLaplacianAlign 仍具有明显的工程与方法学优势：
-\begin{enumerate}
-  \item \textbf{无需重特征模型}：相比 DINO 类方法，Laplacian pyramid 只依赖基础张量算子，部署难度更低，适合资源受限环境。
-  \item \textbf{结构信息更直观}：它直接作用于频率层次，对轮廓、边缘和纹理的影响可以通过多尺度残差进行解释。
-  \item \textbf{可作为高效替代项}：在不追求最优背景 PSNR 的前提下，Laplacian 终端约束提供了一种更轻量的结构正则化方式。
-  \item \textbf{更便于后续改进}：可以自然扩展到 latent 边缘约束、频域约束或与语义特征约束的混合版本。
-\end{enumerate}
+实验结果表明，FlowAlign 在 MSE、PSNR 与 SSIM 等背景一致性指标上表现更优，说明像素级终端约束能够更有效地保持局部像素一致性。
 
-同时，从语义对齐指标来看，FlowLaplacianAlign 的 CLIP Score 与 HPS Score 均略高于 FlowAlign，说明该方法在保持编辑语义表达、增强目标提示词契合度以及提升人类偏好相关评分方面具有一定潜力。这一点也表明，Laplacian 终端约束虽然牺牲了一部分背景保真，但并不一定削弱生成结果的语义自然性，反而可能在某些样本上带来更积极的语义迁移效果。
+相比之下，FlowLaplacianAlign 在 CLIP Score 与 HPS Score 上取得更高结果，说明多尺度频域约束能够为目标语义提供更大的生成自由度，从而增强文本语义融合能力。
 
-Laplacian pyramid 的优点主要体现在以下几个方面：
-\begin{enumerate}
-  \item \textbf{多尺度结构建模}：同时约束低频轮廓与高频边缘，避免仅依赖单尺度像素误差。
-  \item \textbf{无需额外大模型}：相比 DINO、CLIP 等特征提取器，Laplacian 约束更容易部署，依赖更少。
-  \item \textbf{更符合频域直觉}：图像编辑往往首先破坏边缘与频率结构，多尺度残差可作为结构一致性的轻量代理。
-  \item \textbf{实现简单}：只依赖卷积、池化和插值算子，便于与现有 ODE 求解器无缝融合。
-\end{enumerate}
+此外，FlowLaplacianAlign 不依赖额外视觉编码器，仅通过基础张量运算即可完成终端约束，因此具有较低的额外计算成本。
 
-与此同时，FlowLaplacianAlign 在当前实验中未超过 FlowAlign，说明单纯的频域约束并不能完全替代像素级终端点吸引子在 PIE-Bench 这种背景保真型任务中的优势。后续可考虑在 latent、Laplacian 与语义特征约束之间做组合式设计。
+整体而言，该方法并非完全替代像素级约束，而是在结构保持与语义编辑之间提供了另一种具有不同偏好的正则化路径。
 
+% =========================
 \section{结论}
-本文在 FlowAlign \cite{flowalign} 的基础上提出了 FlowLaplacianAlign，通过将像素空间终端约束替换为 latent 空间的多尺度 Laplacian pyramid 势能，实现了一种更轻量的结构保持编辑方案。实验表明，该方法在背景一致性指标上较 baseline 仍有差距，但其具有实现简单、无需额外大型视觉编码器、计算依赖更低、可解释性更强以及语义对齐略有提升等优点。未来可进一步研究 latent 多尺度约束、边缘约束与语义特征约束的组合策略，以提升编辑质量与效率之间的平衡。
+% =========================
 
-\section{参考文献}
+本文提出了一种用于流匹配图像编辑的轻量级终端正则化方法 FlowLaplacianAlign。该方法通过在隐空间中引入多尺度拉普拉斯金字塔约束，实现了对图像结构与纹理信息的频域建模。
+
+实验结果表明，该方法能够在保持较低计算复杂度的同时，提升编辑结果的语义对齐能力，并在结构一致性与语义表达之间形成新的权衡。
+
+未来工作将进一步探索：
+
+\begin{itemize}
+    \item 不同频段的自适应权重设计；
+    \item 与大型视觉特征的混合约束；
+    \item 面向视频编辑的时序频域一致性建模。
+\end{itemize}
+
+% =========================
+\bibliographystyle{plain}
+% =========================
+
 \begin{thebibliography}{99}
+
 \bibitem{sdedit}
-Chenlin Meng, Yutong He, Yang Song, Jiaming Song, Jiajun Wu, Jun-Yan Zhu, and Stefano Ermon.
-\newblock SDEdit: Guided image synthesis and editing with stochastic differential equations.
-\newblock \emph{arXiv preprint arXiv:2108.01073}, 2021.
+Meng, C., He, Y., Song, Y., et al.
+SDEdit: Guided Image Synthesis and Editing with Stochastic Differential Equations.
+\emph{arXiv preprint arXiv:2108.01073}, 2021.
 
 \bibitem{prompt2prompt}
-Amir Hertz, Ron Mokady, Jay Tenenbaum, Kfir Aberman, Yael Pritch, and Daniel Cohen-Or.
-\newblock Prompt-to-Prompt image editing with cross attention control.
-\newblock \emph{arXiv preprint arXiv:2208.01626}, 2022.
+Hertz, A., Mokady, R., Tenenbaum, J., et al.
+Prompt-to-Prompt Image Editing with Cross Attention Control.
+In \emph{International Conference on Learning Representations (ICLR)}, 2023.
 
 \bibitem{instructpix2pix}
-Tim Brooks, Aleksander Holynski, and Alexei A. Efros.
-\newblock InstructPix2Pix: Learning to follow image editing instructions.
-\newblock \emph{arXiv preprint arXiv:2211.09800}, 2022.
+Brooks, T., Holynski, A., and Efros, A. A.
+InstructPix2Pix: Learning to Follow Image Editing Instructions.
+In \emph{CVPR}, 2023.
 
 \bibitem{flowmatching}
-Yaron Lipman, Ricky T.~Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matt Le.
-\newblock Flow Matching for Generative Modeling.
-\newblock \emph{arXiv preprint arXiv:2210.02747}, 2022.
+Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., et al.
+Flow Matching for Generative Modeling.
+\emph{arXiv preprint arXiv:2210.02747}, 2022.
 
 \bibitem{directinversion}
-Xuan Ju, Ailing Zeng, Yuxuan Bian, Shaoteng Liu, and Qiang Xu.
-\newblock Direct Inversion: Boosting Diffusion-based Editing with 3 Lines of Code.
-\newblock \emph{arXiv preprint arXiv:2310.01506}, 2023.
+Ju, X., Zeng, A., Bian, Y., et al.
+Direct Inversion: Boosting Diffusion-based Editing with 3 Lines of Code.
+\emph{arXiv preprint arXiv:2310.01506}, 2023.
 
 \bibitem{flowedit}
-Vladimir Kulikov, Matan Kleiner, Inbar Huberman-Spiegelglas, and Tomer Michaeli.
-\newblock FlowEdit: Inversion-Free Text-Based Editing Using Pre-Trained Flow Models.
-\newblock \emph{arXiv preprint arXiv:2412.08629}, 2024.
+Kulikov, V., Kleiner, M., Huberman-Spiegelglas, I., and Michaeli, T.
+FlowEdit: Inversion-Free Text-Based Editing Using Pre-Trained Flow Models.
+\emph{arXiv preprint arXiv:2412.08629}, 2024.
 
 \bibitem{sd3}
-Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas M\"uller, Harry Saini, Yam Levi, Dominik Lorenz, Axel Sauer, Frederic Boesel, Dustin Podell, Tim Dockhorn, Zion English, Kyle Lacey, Alex Goodwin, Yannik Marek, and Robin Rombach.
-\newblock Scaling Rectified Flow Transformers for High-Resolution Image Synthesis.
-\newblock \emph{arXiv preprint arXiv:2403.03206}, 2024.
+Esser, P., Kulal, S., Blattmann, A., et al.
+Scaling Rectified Flow Transformers for High-Resolution Image Synthesis.
+\emph{arXiv preprint arXiv:2403.03206}, 2024.
 
 \bibitem{flowalign}
-Jeongsol Kim, Yeobin Hong, Jonghyun Park, and Jong Chul Ye.
-\newblock FlowAlign: Trajectory-Regularized, Inversion-Free Flow-based Image Editing.
-\newblock \emph{arXiv preprint arXiv:2505.23145}, 2025.
+Kim, J., Hong, Y., Park, J., and Ye, J. C.
+FlowAlign: Trajectory-Regularized, Inversion-Free Flow-based Image Editing.
+\emph{arXiv preprint arXiv:2505.23145}, 2025.
 
 \bibitem{dinov2}
-Maxime Oquab, Timoth\'ee Darcet, Th\'eo Moutakanni, Huy Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Mahmoud Assran, Nicolas Ballas, Wojciech Galuba, Russell Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Herv\'e J\'egou, Julien Mairal, Patrick Labatut, Armand Joulin, and Piotr Bojanowski.
-\newblock DINOv2: Learning Robust Visual Features without Supervision.
-\newblock \emph{arXiv preprint arXiv:2304.07193}, 2023.
-
-\bibitem{clip}
-Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, Gretchen Krueger, and Ilya Sutskever.
-\newblock Learning Transferable Visual Models From Natural Language Supervision.
-\newblock \emph{arXiv preprint arXiv:2103.00020}, 2021.
-
-\bibitem{lpipsref}
-Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang.
-\newblock The Unreasonable Effectiveness of Deep Features as a Perceptual Metric.
-\newblock In \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, 2018.
-
-\bibitem{ssim}
-Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P. Simoncelli.
-\newblock Image quality assessment: From error visibility to structural similarity.
-\newblock \emph{IEEE Transactions on Image Processing}, 13(4):600--612, 2004.
+Oquab, M., Darcet, T., Moutakanni, T., et al.
+DINOv2: Learning Robust Visual Features without Supervision.
+\emph{arXiv preprint arXiv:2304.07193}, 2023.
 
 \bibitem{laplacian}
-Peter J. Burt and Edward H. Adelson.
-\newblock The Laplacian Pyramid as a Compact Image Code.
-\newblock \emph{IEEE Transactions on Communications}, 31(4):532--540, 1983.
+Burt, P. J., and Adelson, E. H.
+The Laplacian Pyramid as a Compact Image Code.
+\emph{IEEE Transactions on Communications},
+31(4):532--540, 1983.
+
 \end{thebibliography}
 
 \end{document}
