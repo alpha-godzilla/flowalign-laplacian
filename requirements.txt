@@ -1,0 +1,16 @@
+accelerate==1.2.1
+diffusers==0.33.1
+lpips==0.1.4
+modelscope==1.33.0
+numpy==1.26.4
+pandas==2.2.3
+pyarrow==18.1.0
+protobuf==3.20.3
+safetensors==0.5.2
+sentencepiece==0.2.0
+tokenizers==0.21.0
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torchmetrics==1.4.1
+tqdm==4.67.1
+transformers==4.47.1
